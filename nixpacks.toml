@@ -12,4 +12,4 @@ cmds = [
 cmds = ["echo 'Build complete'"]
 
 [start]
-cmd = ". /opt/venv/bin/activate && uvicorn app:app --host 0.0.0.0 --port $PORT"
+cmd = ". /opt/venv/bin/activate && CHROME_BIN=$(which chromium) CHROMEDRIVER_PATH=$(which chromedriver) uvicorn app:app --host 0.0.0.0 --port $PORT"
