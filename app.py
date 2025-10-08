@@ -125,6 +125,9 @@ def create_selenium_driver():
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
     
+
+    chrome_options.binary_location = "/nix/store/*/chromium-*/bin/chromium" if os.path.exists("/nix/store") else None
+    
     driver = webdriver.Chrome(options=chrome_options)
     driver.set_page_load_timeout(30)
     
@@ -1442,4 +1445,5 @@ async def download_file(filename: str, current_user: Optional[Dict[str, str]] = 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
