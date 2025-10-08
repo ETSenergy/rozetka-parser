@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "uvicorn app:app --host 0.0.0.0 --port $PORT",
+    "startCommand": ". /opt/venv/bin/activate && CHROME_BIN=$(which chromium) CHROMEDRIVER_PATH=$(which chromedriver) uvicorn app:app --host 0.0.0.0 --port $PORT",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
