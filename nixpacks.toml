@@ -1,8 +1,15 @@
 [phases.setup]
-nixPkgs = ["python310", "chromium", "chromedriver"]
+nixPkgs = ["python312", "chromium", "chromedriver"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = [
+    "python -m venv /opt/venv",
+    ". /opt/venv/bin/activate && pip install --upgrade pip",
+    ". /opt/venv/bin/activate && pip install -r requirements.txt"
+]
+
+[phases.build]
+cmds = ["echo 'Build complete'"]
 
 [start]
-cmd = "uvicorn app:app --host 0.0.0.0 --port $PORT"
+cmd = ". /opt/venv/bin/activate && uvicorn app:app --host 0.0.0.0 --port $PORT"
