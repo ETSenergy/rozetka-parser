@@ -112,7 +112,7 @@ HEADERS = {
 
 def create_selenium_driver():
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless=new')  # Нова версія headless
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -120,26 +120,44 @@ def create_selenium_driver():
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--single-process')  # Важливо для Railway
+    chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
     
-
-    chrome_options.binary_location = "/nix/store/*/chromium-*/bin/chromium" if os.path.exists("/nix/store") else None
+    # Читаємо шляхи з змінних оточення (встановлені в nixpacks.toml)
+    chrome_bin = os.getenv('CHROME_BIN')
+    if chrome_bin:
+        chrome_options.binary_location = chrome_bin
+        logging.info(f"Використовую Chrome: {chrome_bin}")
     
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(30)
+    chromedriver_path = os.getenv('CHROMEDRIVER_PATH')
     
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     try:
-        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            "userAgent": HEADERS["User-Agent"]
-        })
-    except:
-        pass
-    
-    return driver
+        if chromedriver_path:
+            from selenium.webdriver.chrome.service import Service
+            service = Service(executable_path=chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            logging.info(f"Використовую ChromeDriver: {chromedriver_path}")
+        else:
+            driver = webdriver.Chrome(options=chrome_options)
+            
+        driver.set_page_load_timeout(30)
+        
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        try:
+            driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": HEADERS["User-Agent"]
+            })
+        except:
+            pass
+        
+        return driver
+    except Exception as e:
+        logging.error(f"Помилка створення Selenium driver: {e}")
+        raise
 
 def wait_for_content_load(driver, timeout=30):
     logging.info("⏳ [Selenium] Очікування загрузки контенту...")
@@ -1447,4 +1465,5 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
