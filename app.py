@@ -1445,5 +1445,6 @@ async def download_file(filename: str, current_user: Optional[Dict[str, str]] = 
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
