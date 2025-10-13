@@ -1,6 +1,5 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Form, Request, Depends
+from fastapi import FastAPI, HTTPException, Form, Request, Depends
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import asyncio
@@ -45,10 +44,12 @@ MAX_PAGES = 1000
 class SearchRequest(BaseModel):
     url: str
     include_chars: bool = True
+    pages: Optional[int] = None
 
 class SellerRequest(BaseModel):
     seller_name: str
     include_chars: bool = True
+    pages: Optional[int] = None
 
 class FavoriteRequest(BaseModel):
     name: str
@@ -112,7 +113,7 @@ HEADERS = {
 
 def create_selenium_driver():
     chrome_options = Options()
-    chrome_options.add_argument('--headless=new')  # Нова версія headless
+    chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -120,14 +121,13 @@ def create_selenium_driver():
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--single-process')  # Важливо для Railway
+    chrome_options.add_argument('--single-process')
     chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
     
-    # Читаємо шляхи з змінних оточення (встановлені в nixpacks.toml)
     chrome_bin = os.getenv('CHROME_BIN')
     if chrome_bin:
         chrome_options.binary_location = chrome_bin
@@ -487,6 +487,81 @@ def parse_characteristics(html: str):
         logging.error(f"Помилка парсингу: {e}")
         return {}, ''
 
+async def fetch_video_credit_selenium(product_id, executor):
+    url = f"https://rozetka.com.ua/ua/{product_id}/p{product_id}/"
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(executor, _selenium_fetch_video_credit, url)
+    return result
+
+def _selenium_fetch_video_credit(url):
+    driver = None
+    try:
+        driver = create_selenium_driver()
+        logging.info(f"🔄 [Selenium] Загрузка страницы для відео/кредитів: {url}")
+        driver.get(url)
+        logging.info("Страница загружена")
+        
+        logging.info("Ожидание 2 секунды...")
+        time.sleep(2)
+        
+        logging.info("Прокрутка страницы вниз...")
+        scroll_pause = 0.5
+        screen_height = driver.execute_script("return window.innerHeight")
+        scroll_position = 0
+        
+        for i in range(34):
+            driver.execute_script(f"window.scrollTo(0, {scroll_position});")
+            scroll_position += screen_height
+            time.sleep(scroll_pause)
+            logging.info(f"Прокрутка {i+1}/34...")
+        
+        logging.info("Прокрутка завершена, ожидание загрузки контента...")
+        time.sleep(2)
+        
+        video_count = 0
+        logging.info("Поиск видео на странице...")
+        videos = driver.find_elements(By.CSS_SELECTOR, "#videos-block > section > div > rz-product-video-slider > rz-scroller > div > div > div")
+        
+        if len(videos) > 0:
+            video_count = len(videos)
+            logging.info(f"✓ Знайдено відео: {video_count}")
+        else:
+            logging.info("Видео не найдены по основному селектору, проверяем наличие блока #videos-block...")
+            video_block = driver.find_elements(By.CSS_SELECTOR, "#videos-block")
+            
+            if len(video_block) > 0:
+                logging.info("Блок #videos-block найден, проверяем содержимое...")
+                video_block_html = video_block[0].get_attribute('innerHTML')
+                
+                if "www.youtube.com" in video_block_html:
+                    video_count = 1
+                    logging.info(f"✓ Знайдено відео: {video_count}")
+                else:
+                    video_count = 0
+                    logging.info(f"✓ Знайдено відео: {video_count}")
+                    logging.info("Блок видео пустой - видео отсутствуют")
+            else:
+                video_count = 0
+                logging.info(f"✓ Знайдено відео: {video_count}")
+                logging.info("Блок с видео не найден на странице")
+        
+        credit_count = 0
+        try:
+            buttons = driver.find_elements(By.XPATH, "//rz-product-pictogram-list//rz-scroller//div/div/div/button")
+            credit_count = len(buttons)
+            logging.info(f"✓ Знайдено кредитів: {credit_count}")
+        except Exception as e:
+            logging.warning(f"⚠️ Помилка парсингу кредитів: {e}")
+        
+        return {'video_count': video_count, 'credit_count': credit_count}
+        
+    except Exception as e:
+        logging.error(f"❌ Помилка Selenium відео/кредитів: {e}")
+        return {'video_count': 0, 'credit_count': 0}
+    finally:
+        if driver:
+            driver.quit()
+
 async def fetch_delivery_info(session, product_id, price):
     try:
         url = f"https://product-api.rozetka.com.ua/v4/deliveries/get-deliveries?country=UA&lang=ua&city_id=b205dde2-2e2e-4eb9-aef2-a67c82bbdf27&cost={price}&product_id={product_id}"
@@ -497,7 +572,12 @@ async def fetch_delivery_info(session, product_id, price):
         deliveries = []
         for d in data.get('deliveries', []):
             cost = d.get('cost', {})
-            deliveries.append({'title': d.get('title', ''), 'cost': cost.get('new') if cost.get('new') is not None else cost.get('text', 'Н/Д')})
+            if cost.get('new') is not None:
+                cost_value = 'Безкоштовно' if cost['new'] == 0 else cost['new']
+            else:
+                text_value = cost.get('text', 'Н/Д')
+                cost_value = 'Безкоштовно' if text_value == '0' else text_value
+            deliveries.append({'title': d.get('title', ''), 'cost': cost_value})
         return {'deliveries': deliveries, 'payments': data.get('payments', '')}
     except Exception as e:
         logging.error(f"Помилка доставки: {e}")
@@ -515,10 +595,13 @@ async def process_product(session, product, executor, include_chars=True, mode="
     characteristics, warranty = {}, ''
     product_avg_rating = None
     grouping_info = None
+    video_credit = {'video_count': 0, 'credit_count': 0}
     
     if include_chars:
         html = await fetch_product_page(session, href, executor)
         characteristics, warranty = parse_characteristics(html)
+    
+    video_credit = await fetch_video_credit_selenium(product_id, executor)
     
     if mode == "seller" and not include_chars:
         product_avg_rating = await fetch_product_reviews(session, product_id)
@@ -533,7 +616,9 @@ async def process_product(session, product, executor, include_chars=True, mode="
         'characteristics': characteristics, 
         'warranty': warranty,
         'wishlist_count': wishlist_count, 
-        'delivery': delivery_info
+        'delivery': delivery_info,
+        'video_count': video_credit['video_count'],
+        'credit_count': video_credit['credit_count']
     }
     
     if mode == "seller" and not include_chars:
@@ -611,12 +696,11 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
         filtered_chars = sorted([c for c in unique_chars if c in popular_chars_set])
         other_chars = sorted([c for c in unique_chars if c not in popular_chars_set])
     
-    unique_deliveries = set()
-    for product in products:
-        for d in product.get('delivery', {}).get('deliveries', []):
-            if d.get('title'):
-                unique_deliveries.add(d['title'])
-    unique_deliveries = sorted(list(unique_deliveries))
+    delivery_columns = [
+        "Самовивіз з магазинів Rozetka",
+        "Самовивіз з Нової Пошти",
+        "Самовивіз з поштоматів Rozetka"
+    ]
     
     missing_filtered_chars = False
     if include_chars and filtered_chars:
@@ -650,17 +734,17 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
     
     fixed_headers = ['Місце в видачі', 'Назва продукта', 'Посилання', 'Пошуковий запит', 'Категорія', 'Бренд', 
                      'Ціна стара', 'Ціна зараз', 'Відгуки зірки', 'Відгуки кількість', 'Кількість в списках бажань', 
-                     'Продавець', 'Оплата', 'Гарантія']
+                     'Продавець', 'Оплата', 'Гарантія', 'Кількість відео', 'Кількість кредитів']
     
     if mode == "seller" and not include_chars:
         fixed_headers.extend(['Середня оцінка (перші 3 відгуки)', 'Групування, так/ні', 'Кількість карток у групуванні', 'Мінімальна ціна в групуванні', 'Продавці в групуванні'])
     
-    headers = fixed_headers + unique_deliveries
+    headers = fixed_headers + delivery_columns
     if include_chars:
         headers += filtered_chars + other_chars
     
     fixed_count = len(fixed_headers)
-    delivery_count = len(unique_deliveries)
+    delivery_count = len(delivery_columns)
     filtered_count = len(filtered_chars)
     
     for col, header in enumerate(headers, 1):
@@ -680,7 +764,18 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
     
     for idx, product in enumerate(products, 1):
         row = idx + 1
-        delivery_dict = {d.get('title', ''): d.get('cost', '') for d in product.get('delivery', {}).get('deliveries', [])}
+        
+        deliveries = product.get('delivery', {}).get('deliveries', [])
+        delivery_dict = {}
+        for d in deliveries:
+            title = d.get('title', '').lower()
+            cost = d.get('cost', '')
+            if 'магазин' in title:
+                delivery_dict["Самовивіз з магазинів Rozetka"] = cost
+            elif 'нова пош' in title:
+                delivery_dict["Самовивіз з Нової Пошти"] = cost
+            elif 'поштомат' in title:
+                delivery_dict["Самовивіз з поштоматів Rozetka"] = cost
         
         cat = product.get('category', {})
         if hasattr(cat, 'get'):
@@ -694,7 +789,8 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
             product.get('old_price', ''), product.get('price', ''),
             product.get('comments_mark', ''), product.get('comments_amount', 0),
             product.get('wishlist_count', 0), product.get('seller', {}).get('title', ''),
-            product.get('delivery', {}).get('payments', ''), product.get('warranty', '')
+            product.get('delivery', {}).get('payments', ''), product.get('warranty', ''),
+            product.get('video_count', 0), product.get('credit_count', 0)
         ]
         
         if mode == "seller" and not include_chars:
@@ -704,7 +800,7 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
             data.append(product.get('min_price_in_group', ''))
             data.append(product.get('sellers_in_group', ''))
         
-        for delivery_name in unique_deliveries:
+        for delivery_name in delivery_columns:
             data.append(delivery_dict.get(delivery_name, ''))
         
         if include_chars:
@@ -721,7 +817,6 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
         ws.column_dimensions[column[0].column_letter].width = min(max_length + 2, 50)
 
 def extract_product_ids_from_urls(urls: List[str]) -> List[int]:
-    """Витягує ID товарів з URL"""
     product_ids = []
     for url in urls:
         match = re.search(r'/p(\d+)/', url)
@@ -787,12 +882,13 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
         <html>
         <head><title>Rozetka Parser</title><meta charset="utf-8"></head>
         <body>
-            <h1>Rozetka Parser (швидкий режим - перші 2 сторінки)</h1>
+            <h1>Rozetka Parser</h1>
             <p>Добро пожаловать, {current_user['username']}!</p>
             
             <div class="option">
                 <h2>1. Парсинг по запиту/категорії</h2>
                 <input type="text" id="searchUrl" placeholder="URL пошуку">
+                <input type="number" id="searchPages" placeholder="Кількість сторінок" min="1">
                 <label><input type="checkbox" class="checkbox" id="searchChars" checked> З характеристиками</label>
                 <button onclick="runSearch()">Запустити</button>
             </div>
@@ -800,6 +896,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
             <div class="option">
                 <h2>2. Парсинг продавця</h2>
                 <input type="text" id="sellerName" placeholder="Назва або URL продавця">
+                <input type="number" id="sellerPages" placeholder="Кількість сторінок" min="1">
                 <label><input type="checkbox" class="checkbox" id="sellerChars" checked> З характеристиками</label>
                 <button onclick="runSeller()">Запустити</button>
             </div>
@@ -830,6 +927,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                 
                 async function runSearch() {{
                     const url = document.getElementById('searchUrl').value;
+                    const pages = parseInt(document.getElementById('searchPages').value) || undefined;
                     const includeChars = document.getElementById('searchChars').checked;
                     if (!url) {{ alert('Введіть URL'); return; }}
                     
@@ -837,7 +935,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                     const res = await fetch('/api/search', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{url, include_chars: includeChars}})
+                        body: JSON.stringify({{url, include_chars: includeChars, pages}})
                     }});
                     const data = await res.json();
                     if (data.filename) {{
@@ -850,6 +948,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                 
                 async function runSeller() {{
                     let sellerName = document.getElementById('sellerName').value;
+                    const pages = parseInt(document.getElementById('sellerPages').value) || undefined;
                     const includeChars = document.getElementById('sellerChars').checked;
                     if (!sellerName) {{ alert('Введіть назву продавця'); return; }}
                     
@@ -864,7 +963,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                     const res = await fetch('/api/seller', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{seller_name: sellerName, include_chars: includeChars}})
+                        body: JSON.stringify({{seller_name: sellerName, include_chars: includeChars, pages}})
                     }});
                     const data = await res.json();
                     if (data.filename) {{
@@ -1345,31 +1444,118 @@ async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] 
     if not current_user:
         raise HTTPException(401, "Не авторизовано")
     try:
-        query = urllib.parse.urlparse(req.url).query
-        text = urllib.parse.parse_qs(query).get('text', [''])[0]
-        if not text:
-            raise HTTPException(400, "Не знайдено параметр 'text'")
+        category_match = re.search(r'/c(\d+)/?', req.url)
+        if category_match:
+            category_id = category_match.group(1)
+            search_text = f"Категорія {category_id}"
+            base_url = f"https://catalog-api.rozetka.com.ua/v0.1/api/category/catalog?country=UA&lang=ua&id={category_id}"
+            first_page_url = base_url + "&filters=page:1"
+            session = cloudscraper.create_scraper()
+            session.headers.update(HEADERS)
+            data = await fetch_page(session, first_page_url)
+            
+            # Перевірка на порожній результат
+            if not data or not isinstance(data, dict):
+                raise HTTPException(400, f"Категорія {category_id} не знайдена або порожня")
+            
+            # Отримуємо інформацію про пагінацію з правильної структури
+            goods_info = data.get('goods', {})
+            if not isinstance(goods_info, dict):
+                raise HTTPException(400, "Невірна структура відповіді API")
+            
+            max_pages = goods_info.get('total_pages', 0)
+            total_found = goods_info.get('goods_in_category', 0)
+            
+            logging.info(f"Максимум сторінок знайдено: {max_pages}")
+            logging.info(f"Знайдено товарів: {total_found}, Парсимо сторінок (можна парсити до {max_pages})")
+            
+            if total_found == 0 or max_pages == 0:
+                raise HTTPException(400, f"В категорії {category_id} немає товарів")
+            
+            total_pages = min(max_pages, MAX_PAGES)
+            if req.pages is not None:
+                total_pages = min(req.pages, max_pages, MAX_PAGES)
+            
+            all_product_ids = goods_info.get('ids', [])
+            if not all_product_ids:
+                raise HTTPException(400, "Не вдалося отримати список товарів")
+            
+            logging.info(f"Перша сторінка: зібрано {len(all_product_ids)} товарів")
+            for page in range(2, total_pages + 1):
+                page_url = base_url + f"&filters=page:{page}"
+                data = await fetch_page(session, page_url)
+                
+                if not data or not isinstance(data, dict):
+                    logging.warning(f"Сторінка {page} повернула невірні дані")
+                    break
+                
+                goods_info = data.get('goods', {})
+                page_ids = goods_info.get('ids', []) if isinstance(goods_info, dict) else []
+                
+                if not page_ids:
+                    logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
+                    break
+                
+                all_product_ids.extend(page_ids)
+                logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_ids)} товарів (всього: {len(all_product_ids)})")
+            
+            filename_prefix = f"rozetka_category_{category_id}"
+            
+        else:
+            query = urllib.parse.urlparse(req.url).query
+            text = urllib.parse.parse_qs(query).get('text', [''])[0]
+            if not text:
+                raise HTTPException(400, "Не знайдено параметр 'text' або ID категорії")
+            
+            search_text = text
+            base_url = "https://search.rozetka.com.ua/ua/search/api/v7/?country=UA&lang=ua&text=" + urllib.parse.quote(text)
+            session = cloudscraper.create_scraper()
+            session.headers.update(HEADERS)
+            data = await fetch_page(session, base_url)
+            
+            if not data or not isinstance(data, dict):
+                raise HTTPException(400, f"Пошук за запитом '{text}' не дав результатів")
+            
+            goods_info = data.get('goods', {})
+            if not isinstance(goods_info, dict):
+                raise HTTPException(400, "Невірна структура відповіді API")
+            
+            max_pages = goods_info.get('total_pages', 0)
+            total_found = goods_info.get('goods_in_category', 0)
+            
+            logging.info(f"Максимум сторінок знайдено: {max_pages}")
+            logging.info(f"Знайдено товарів: {total_found}, Парсимо сторінок (можна парсити до {max_pages})")
+            
+            if total_found == 0 or max_pages == 0:
+                raise HTTPException(400, f"За запитом '{text}' нічого не знайдено")
+            
+            total_pages = min(max_pages, MAX_PAGES)
+            if req.pages is not None:
+                total_pages = min(req.pages, max_pages, MAX_PAGES)
+            
+            all_product_ids = []
+            for page in range(1, total_pages + 1):
+                page_url = f"{base_url}&page={page}"
+                data = await fetch_page(session, page_url)
+                
+                if not data or not isinstance(data, dict):
+                    logging.warning(f"Сторінка {page} повернула невірні дані")
+                    break
+                
+                goods_info = data.get('goods', {})
+                page_ids = goods_info.get('ids', []) if isinstance(goods_info, dict) else []
+                
+                if not page_ids:
+                    logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
+                    break
+                
+                all_product_ids.extend(page_ids)
+                logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_ids)} товарів (всього: {len(all_product_ids)})")
+            
+            filename_prefix = f"rozetka_search_{text[:20].replace(' ', '_')}"
         
-        base_url = "https://search.rozetka.com.ua/ua/search/api/v7/?country=UA&lang=ua&text=" + urllib.parse.quote(text)
-        
-        session = cloudscraper.create_scraper()
-        session.headers.update(HEADERS)
-        
-        data = await fetch_page(session, base_url)
-        total_pages = min(data.get('pagination', {}).get('total_pages', 1), MAX_PAGES)
-        total_found = data.get('pagination', {}).get('total_found', 0)
-        logging.info(f"Знайдено товарів: {total_found}, Парсимо перші {total_pages} сторінок")
-        
-        all_product_ids = []
-        for page in range(1, total_pages + 1):
-            page_url = f"{base_url}&page={page}"
-            data = await fetch_page(session, page_url)
-            page_ids = [p.get('id') for p in data.get('goods', []) if p.get('id')]
-            if not page_ids:
-                logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
-                break
-            all_product_ids.extend(page_ids)
-            logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_ids)} товарів (всього: {len(all_product_ids)})")
+        if not all_product_ids:
+            raise HTTPException(400, "Не вдалося зібрати жодного товару")
         
         logging.info(f"Всього товарів: {len(all_product_ids)}")
         
@@ -1386,12 +1572,16 @@ async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] 
         
         executor.shutdown(wait=True)
         
-        filename = f"downloads/rozetka_search_{text[:20].replace(' ', '_')}_{uuid.uuid4().hex[:8]}.xlsx"
-        await export_to_excel(all_products, text, filename, req.include_chars, "search")
+        filename = f"downloads/{filename_prefix}_{uuid.uuid4().hex[:8]}.xlsx"
+        await export_to_excel(all_products, search_text, filename, req.include_chars, "search")
         
         return {"filename": os.path.basename(filename), "count": len(all_products)}
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Помилка: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         raise HTTPException(500, str(e))
 
 @app.post("/api/seller")
@@ -1416,10 +1606,14 @@ async def api_seller(req: SellerRequest, current_user: Optional[Dict[str, str]] 
         
         first_page = await fetch_seller_api(session, req.seller_name, 1)
         seller_title = first_page['seller_title']
-        total_pages = min(first_page['total_pages'], MAX_PAGES)
+        max_pages = first_page['total_pages']
+        logging.info(f"Максимум сторінок знайдено: {max_pages}")
+        total_pages = min(max_pages, MAX_PAGES)
+        if req.pages is not None:
+            total_pages = min(req.pages, max_pages, MAX_PAGES)
         all_product_ids = first_page['product_ids']
         
-        logging.info(f"Продавець: {seller_title}, Парсимо перші {total_pages} сторінок, Перша сторінка: {len(all_product_ids)} товарів")
+        logging.info(f"Продавець: {seller_title}, Парсимо {total_pages} сторінок (можна парсити до {max_pages}), Перша сторінка: {len(all_product_ids)} товарів")
         
         for page in range(2, total_pages + 1):
             page_data = await fetch_seller_api(session, req.seller_name, page)
@@ -1465,5 +1659,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
