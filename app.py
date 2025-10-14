@@ -123,10 +123,26 @@ def create_selenium_driver():
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--single-process')
     chrome_options.add_argument('--disable-software-rasterizer')
+    chrome_options.add_argument('--disable-setuid-sandbox')
+    chrome_options.add_argument('--disable-infobars')
+    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-sync')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--hide-scrollbars')
+    chrome_options.add_argument('--metrics-recording-only')
+    chrome_options.add_argument('--mute-audio')
+    chrome_options.add_argument('--no-first-run')
+    chrome_options.add_argument('--safebrowsing-disable-auto-update')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--ignore-ssl-errors')
+    chrome_options.add_argument('--ignore-certificate-errors-spki-list')
+    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
+    chrome_options.page_load_strategy = 'normal'
     
     chrome_bin = os.getenv('CHROME_BIN')
     if chrome_bin:
@@ -1659,3 +1675,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
