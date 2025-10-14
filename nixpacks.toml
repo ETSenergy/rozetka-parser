@@ -1,6 +1,6 @@
 [phases.setup]
 nixPkgs = ["python312", "chromium", "chromedriver"]
-nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat", "libxcb", "libxkbcommon", "libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "pango", "cairo", "alsa-lib", "mesa", "gtk3"]
+nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat", "libxcb", "libxkbcommon", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "pango", "cairo", "alsa-lib", "mesa", "gtk3"]
 
 [phases.install]
 cmds = [
