@@ -1,15 +1,23 @@
 [phases.setup]
 nixPkgs = ["python312", "chromium", "chromedriver"]
+nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat", "libxcb", "libxkbcommon", "libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "pango", "cairo", "alsa-lib", "mesa", "gtk3"]
 
 [phases.install]
 cmds = [
     "python -m venv /opt/venv",
     ". /opt/venv/bin/activate && pip install --upgrade pip",
-    ". /opt/venv/bin/activate && pip install -r requirements.txt"
+    ". /opt/venv/bin/activate && pip install -r requirements.txt",
+    "mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium",
+    "chmod -R 1777 /tmp/.X11-unix /tmp/.chrome /tmp/.config",
+    "mkdir -p /app/downloads"
 ]
 
 [phases.build]
-cmds = ["echo 'Build complete'"]
+cmds = [
+    "echo 'Build complete'",
+    "echo 'Chrome location:' $(which chromium)",
+    "echo 'ChromeDriver location:' $(which chromedriver)"
+]
 
 [start]
-cmd = ". /opt/venv/bin/activate && CHROME_BIN=$(which chromium) CHROMEDRIVER_PATH=$(which chromedriver) uvicorn app:app --host 0.0.0.0 --port $PORT"
+cmd = ". /opt/venv/bin/activate && DISPLAY=:99 CHROME_BIN=$(which chromium) CHROMEDRIVER_PATH=$(which chromedriver) HOME=/tmp TMPDIR=/tmp uvicorn app:app --host 0.0.0.0 --port $PORT"
