@@ -215,7 +215,14 @@ def create_selenium_driver():
         driver.set_script_timeout(60)
         
 
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        try:
+            driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                'source': '''
+                    delete Object.getPrototypeOf(navigator).webdriver
+                '''
+            })
+        except Exception as e:
+            logging.warning(f"Не вдалося приховати webdriver: {e}")
         
         try:
             driver.execute_cdp_cmd('Network.setUserAgentOverride', {
@@ -284,11 +291,35 @@ async def fetch_page(session, url, delay=0.5):
     try:
         logging.info(f"Отримання сторінки: {url}")
         response = session.get(url, timeout=15)
-        response.raise_for_status()
-        await asyncio.sleep(random.uniform(delay, delay + 0.5))
-        return response.json().get('data', {})
+        
+        logging.info(f"Status code: {response.status_code}")
+        
+        if response.status_code != 200:
+            logging.error(f"Помилка HTTP {response.status_code}")
+            logging.error(f"Response text (перші 500 символів): {response.text[:500]}")
+            return {}
+        
+        try:
+            json_data = response.json()
+            logging.info(f"JSON отримано, структура: {list(json_data.keys())}")
+            data = json_data.get('data', {})
+            
+            if not data:
+                logging.warning(f"Пустий 'data' в відповіді. Повна структура: {json_data.keys()}")
+                return {}
+                
+            await asyncio.sleep(random.uniform(delay, delay + 0.5))
+            return data
+            
+        except ValueError as e:
+            logging.error(f"Помилка парсингу JSON: {e}")
+            logging.error(f"Response text: {response.text[:1000]}")
+            return {}
+            
     except Exception as e:
-        logging.error(f"Помилка: {e}")
+        logging.error(f"Помилка fetch_page: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return {}
 
 async def fetch_wishlist_count(session, product_id):
@@ -689,11 +720,24 @@ async def process_product(session, product, executor, include_chars=True, mode="
         html = await fetch_product_page(session, href, executor)
         characteristics, warranty = parse_characteristics(html)
     
-    video_credit = await fetch_video_credit_selenium(product_id, executor)
+    try:
+        video_credit = await fetch_video_credit_selenium(product_id, executor)
+    except Exception as e:
+        logging.warning(f"⚠️ Selenium не працює для відео/кредитів: {e}")
+        video_credit = {'video_count': 0, 'credit_count': 0}
     
     if mode == "seller" and not include_chars:
         product_avg_rating = await fetch_product_reviews(session, product_id)
-        grouping_info = await fetch_product_grouping_selenium(product_id, executor)
+        try:
+            grouping_info = await fetch_product_grouping_selenium(product_id, executor)
+        except Exception as e:
+            logging.warning(f"⚠️ Selenium не працює для групування: {e}")
+            grouping_info = {
+                'has_grouping': 'Н/Д',
+                'grouping_count': 0,
+                'min_price': '',
+                'sellers': []
+            }
     
     delivery_info = await fetch_delivery_info(session, product_id, price) if product_id and price else None
     
@@ -740,6 +784,17 @@ def get_popular_characteristics(products, threshold=350):
     return [name for name, count in char_count.items() if count >= threshold]
 
 async def export_to_excel(all_products, search_text, filename, include_chars=True, mode="search"):
+    downloads_dir = "downloads"
+    if not os.path.exists(downloads_dir):
+        os.makedirs(downloads_dir, exist_ok=True)
+        logging.info(f"Створено директорію: {downloads_dir}")
+    
+    if not os.access(downloads_dir, os.W_OK):
+        logging.error(f"Немає прав на запис в {downloads_dir}")
+        raise Exception(f"Немає прав на запис в {downloads_dir}")
+    
+    logging.info(f"Починаємо створення файлу: {filename}")
+    
     wb = Workbook()
     if 'Sheet' in wb.sheetnames:
         wb.remove(wb['Sheet'])
@@ -769,7 +824,13 @@ async def export_to_excel(all_products, search_text, filename, include_chars=Tru
                                     category_name, mode)
     
     wb.save(filename)
-    logging.info(f"Excel файл збережено: {filename}")
+    
+    if os.path.exists(filename):
+        file_size = os.path.getsize(filename)
+        logging.info(f"✅ Excel файл збережено: {filename}, розмір: {file_size} байт")
+    else:
+        logging.error(f"❌ Файл не створено: {filename}")
+        raise Exception(f"Файл не створено: {filename}")
 
 async def create_sheet_with_data(wb, products, search_text, include_chars, popular_chars, sheet_base_name, mode):
     unique_chars = set()
@@ -1542,11 +1603,9 @@ async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] 
             session.headers.update(HEADERS)
             data = await fetch_page(session, first_page_url)
             
-            # Перевірка на порожній результат
             if not data or not isinstance(data, dict):
                 raise HTTPException(400, f"Категорія {category_id} не знайдена або порожня")
             
-            # Отримуємо інформацію про пагінацію з правильної структури
             goods_info = data.get('goods', {})
             if not isinstance(goods_info, dict):
                 raise HTTPException(400, "Невірна структура відповіді API")
@@ -1738,14 +1797,62 @@ async def api_seller(req: SellerRequest, current_user: Optional[Dict[str, str]] 
 async def download_file(filename: str, current_user: Optional[Dict[str, str]] = Depends(get_current_user)):
     if not current_user:
         raise HTTPException(401, "Не авторизовано")
+    
     file_path = f"downloads/{filename}"
-    if os.path.exists(file_path):
-        return FileResponse(file_path, filename=filename, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    raise HTTPException(404, "Файл не знайдено")
+    abs_path = os.path.abspath(file_path)
+    
+    logging.info(f"Спроба завантажити файл: {abs_path}")
+    
+    if not os.path.exists(file_path):
+        logging.error(f"❌ Файл не знайдено: {abs_path}")
+        if os.path.exists("downloads"):
+            files = os.listdir("downloads")
+            logging.error(f"Файли в downloads: {files}")
+        raise HTTPException(404, f"Файл не знайдено: {filename}")
+    
+    file_size = os.path.getsize(file_path)
+    logging.info(f"✅ Файл знайдено: {abs_path}, розмір: {file_size} байт")
+    
+    return FileResponse(
+        file_path, 
+        filename=filename, 
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
+
+@app.get("/health")
+async def health_check():
+    chrome_exists = os.path.exists('/usr/bin/chromium')
+    chromedriver_exists = os.path.exists('/usr/bin/chromedriver')
+    downloads_exists = os.path.exists('downloads')
+    downloads_writable = os.access('downloads', os.W_OK) if downloads_exists else False
+    
+    return {
+        "status": "ok",
+        "chrome": chrome_exists,
+        "chromedriver": chromedriver_exists,
+        "downloads_dir": downloads_exists,
+        "downloads_writable": downloads_writable,
+        "downloads_files": os.listdir('downloads') if downloads_exists else []
+    }
+
+@app.get("/debug")
+async def debug_info(current_user: Optional[Dict[str, str]] = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(401, "Не авторизовано")
+    
+    return {
+        "cwd": os.getcwd(),
+        "downloads_exists": os.path.exists('downloads'),
+        "downloads_files": os.listdir('downloads') if os.path.exists('downloads') else [],
+        "tmp_files": os.listdir('/tmp')[:20],
+        "chrome_bin": os.getenv('CHROME_BIN'),
+        "chromedriver_path": os.getenv('CHROMEDRIVER_PATH'),
+    }
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
