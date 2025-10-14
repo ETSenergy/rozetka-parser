@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 
+# Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
@@ -25,34 +26,42 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    procps \
     && rm -rf /var/lib/apt/lists/*
-
 
 WORKDIR /app
 
-
 COPY requirements.txt .
-
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-
 COPY . .
 
+# Создание всех необходимых директорий с правильными правами
+RUN mkdir -p \
+    /tmp/.X11-unix \
+    /tmp/.chrome \
+    /tmp/.config/chromium \
+    /tmp/chrome-user-data \
+    /tmp/chrome-data \
+    /tmp/chrome-cache \
+    /app/downloads && \
+    chmod -R 1777 /tmp && \
+    chmod -R 777 /app/downloads
 
-RUN mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium /app/downloads && \
-    chmod -R 1777 /tmp/.X11-unix /tmp/.chrome /tmp/.config
+# Переменные окружения
+ENV CHROME_BIN=/usr/bin/chromium \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    DISPLAY=:99 \
+    HOME=/tmp \
+    TMPDIR=/tmp \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
 
-
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-ENV DISPLAY=:99
-ENV HOME=/tmp
-ENV TMPDIR=/tmp
-
+# Проверка установки Chrome
+RUN chromium --version && chromedriver --version
 
 EXPOSE 8000
 
-
-CMD uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 120"]
