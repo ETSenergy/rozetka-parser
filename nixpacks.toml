@@ -1,22 +1,22 @@
 [phases.setup]
-nixPkgs = ["python312Full", "chromium", "chromedriver"]
+nixPkgs = ["python312", "chromium", "chromedriver"]
 nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat", "xorg.libxcb", "libxkbcommon", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "pango", "cairo", "alsa-lib", "mesa", "gtk3"]
 
 [phases.install]
 cmds = [
-    "python -m venv /opt/venv --copies",
-    ". /opt/venv/bin/activate && pip install --upgrade pip",
-    ". /opt/venv/bin/activate && pip install -r requirements.txt",
-    "mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium",
-    "chmod -R 1777 /tmp/.X11-unix /tmp/.chrome /tmp/.config",
-    "mkdir -p /app/downloads"
+  "python -m venv /opt/venv --copies",
+  ". /opt/venv/bin/activate && pip install --upgrade pip",
+  ". /opt/venv/bin/activate && pip install -r requirements.txt",
+  "mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium",
+  "chmod -R 1777 /tmp/.X11-unix /tmp/.chrome /tmp/.config",
+  "mkdir -p /app/downloads"
 ]
 
 [phases.build]
 cmds = [
-    "echo 'Build complete'",
-    "echo 'Chrome location:' $(which chromium)",
-    "echo 'ChromeDriver location:' $(which chromedriver)"
+  "echo 'Build complete'",
+  "echo 'Chrome location:' $(which chromium)",
+  "echo 'ChromeDriver location:' $(which chromedriver)"
 ]
 
 [start]
