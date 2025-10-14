@@ -4,8 +4,7 @@ nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat"
 
 [phases.install]
 cmds = [
-  "pip install --upgrade pip --break-system-packages",
-  "pip install -r requirements.txt --break-system-packages",
+  "pip install -r requirements.txt --break-system-packages --no-cache-dir",
   "mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium",
   "chmod -R 1777 /tmp/.X11-unix /tmp/.chrome /tmp/.config",
   "mkdir -p /app/downloads"
