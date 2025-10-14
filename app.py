@@ -113,17 +113,39 @@ HEADERS = {
 
 def create_selenium_driver():
     chrome_options = Options()
+    
+
     chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--disable-software-rasterizer')
+    chrome_options.add_argument('--disable-setuid-sandbox')
+    
+
+    chrome_options.add_argument('--remote-debugging-port=9222')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    chrome_options.add_argument('--disable-breakpad')
+    chrome_options.add_argument('--disable-component-extensions-with-background-pages')
+    chrome_options.add_argument('--disable-features=TranslateUI,BlinkGenPropertyTrees')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--disable-hang-monitor')
+    chrome_options.add_argument('--disable-client-side-phishing-detection')
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--start-maximized')
+    
+
+    chrome_options.add_argument('--single-process')
+    chrome_options.add_argument('--memory-pressure-off')
+    chrome_options.add_argument('--max-old-space-size=4096')
+    
+
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--single-process')
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--disable-infobars')
     chrome_options.add_argument('--disable-background-networking')
     chrome_options.add_argument('--disable-default-apps')
@@ -137,42 +159,92 @@ def create_selenium_driver():
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('--ignore-certificate-errors-spki-list')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    
+
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
+    
+
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
+    
+
+    chrome_options.add_argument('--user-data-dir=/tmp/chrome-user-data')
+    chrome_options.add_argument('--data-path=/tmp/chrome-data')
+    chrome_options.add_argument('--disk-cache-dir=/tmp/chrome-cache')
+    chrome_options.add_argument('--homedir=/tmp')
+    
+
+    prefs = {
+        'profile.default_content_setting_values': {
+            'images': 2, 
+            'javascript': 1,
+            'cookies': 1
+        },
+        'profile.managed_default_content_settings': {'images': 2},
+        'disk-cache-size': 4096
+    }
+    chrome_options.add_experimental_option('prefs', prefs)
+    
     chrome_options.page_load_strategy = 'normal'
     
+
     chrome_bin = os.getenv('CHROME_BIN')
     if chrome_bin:
         chrome_options.binary_location = chrome_bin
-        logging.info(f"Використовую Chrome: {chrome_bin}")
+        logging.info(f"Используем Chrome: {chrome_bin}")
     
+
     chromedriver_path = os.getenv('CHROMEDRIVER_PATH')
     
     try:
-        if chromedriver_path:
+        if chromedriver_path and os.path.exists(chromedriver_path):
             from selenium.webdriver.chrome.service import Service
-            service = Service(executable_path=chromedriver_path)
+            service = Service(
+                executable_path=chromedriver_path,
+                log_path='/tmp/chromedriver.log',
+                service_args=['--verbose']
+            )
             driver = webdriver.Chrome(service=service, options=chrome_options)
-            logging.info(f"Використовую ChromeDriver: {chromedriver_path}")
+            logging.info(f"✓ ChromeDriver запущен: {chromedriver_path}")
         else:
             driver = webdriver.Chrome(options=chrome_options)
+            logging.info("✓ ChromeDriver запущен (системный)")
             
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(60)
+        driver.set_script_timeout(60)
         
+
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         try:
             driver.execute_cdp_cmd('Network.setUserAgentOverride', {
                 "userAgent": HEADERS["User-Agent"]
             })
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Не удалось установить User-Agent через CDP: {e}")
+        
+
+        try:
+            driver.execute_script("return navigator.userAgent")
+            logging.info("✓ Selenium driver работает корректно")
+        except Exception as e:
+            logging.error(f"Selenium driver не отвечает: {e}")
+            raise
         
         return driver
+        
     except Exception as e:
-        logging.error(f"Помилка створення Selenium driver: {e}")
+        logging.error(f"❌ Ошибка создания Selenium driver: {e}")
+        
+
+        if chrome_bin:
+            logging.info(f"Chrome binary существует: {os.path.exists(chrome_bin)}")
+        if chromedriver_path:
+            logging.info(f"ChromeDriver существует: {os.path.exists(chromedriver_path)}")
+        
+        logging.info(f"Содержимое /tmp: {os.listdir('/tmp')[:10]}")
+        
         raise
 
 def wait_for_content_load(driver, timeout=30):
@@ -1675,4 +1747,5 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
