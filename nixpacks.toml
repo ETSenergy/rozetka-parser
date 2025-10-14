@@ -4,7 +4,7 @@ nixLibs = ["glibc", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat"
 
 [phases.install]
 cmds = [
-    "python -m venv /opt/venv",
+    "python -m venv /opt/venv --copies",
     ". /opt/venv/bin/activate && pip install --upgrade pip",
     ". /opt/venv/bin/activate && pip install -r requirements.txt",
     "mkdir -p /tmp/.X11-unix /tmp/.chrome /tmp/.config/chromium",
