@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Form, Request, Depends
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Form, Request, Depends
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import asyncio
@@ -44,12 +45,12 @@ MAX_PAGES = 1000
 class SearchRequest(BaseModel):
     url: str
     include_chars: bool = True
-    pages: Optional[int] = None
+    max_pages: int = 2
 
 class SellerRequest(BaseModel):
     seller_name: str
     include_chars: bool = True
-    pages: Optional[int] = None
+    max_pages: int = 2
 
 class FavoriteRequest(BaseModel):
     name: str
@@ -112,6 +113,7 @@ HEADERS = {
 }
 
 def create_selenium_driver():
+    """Создание Selenium WebDriver оптимизированного для Railway"""
     chrome_options = Options()
     
 
@@ -119,139 +121,71 @@ def create_selenium_driver():
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--disable-setuid-sandbox')
-    
-
-    chrome_options.add_argument('--remote-debugging-port=9222')
-    chrome_options.add_argument('--disable-background-timer-throttling')
-    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
-    chrome_options.add_argument('--disable-renderer-backgrounding')
-    chrome_options.add_argument('--disable-breakpad')
-    chrome_options.add_argument('--disable-component-extensions-with-background-pages')
-    chrome_options.add_argument('--disable-features=TranslateUI,BlinkGenPropertyTrees')
-    chrome_options.add_argument('--disable-ipc-flooding-protection')
-    chrome_options.add_argument('--disable-hang-monitor')
-    chrome_options.add_argument('--disable-client-side-phishing-detection')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--start-maximized')
-    
-
-    chrome_options.add_argument('--single-process')
-    chrome_options.add_argument('--memory-pressure-off')
-    chrome_options.add_argument('--max-old-space-size=4096')
     
 
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
-    chrome_options.add_argument('--disable-infobars')
-    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    
+
+    chrome_options.add_argument('--single-process')
+    chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--disable-default-apps')
-    chrome_options.add_argument('--disable-sync')
-    chrome_options.add_argument('--disable-translate')
-    chrome_options.add_argument('--hide-scrollbars')
-    chrome_options.add_argument('--metrics-recording-only')
-    chrome_options.add_argument('--mute-audio')
-    chrome_options.add_argument('--no-first-run')
-    chrome_options.add_argument('--safebrowsing-disable-auto-update')
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--ignore-ssl-errors')
-    chrome_options.add_argument('--ignore-certificate-errors-spki-list')
+    
+
+    chrome_options.add_argument('--window-size=1920,1080')
     
 
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
     
 
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("useAutomationExtension", False)
     
-
-    chrome_options.add_argument('--user-data-dir=/tmp/chrome-user-data')
-    chrome_options.add_argument('--data-path=/tmp/chrome-data')
-    chrome_options.add_argument('--disk-cache-dir=/tmp/chrome-cache')
-    chrome_options.add_argument('--homedir=/tmp')
-    
-
-    prefs = {
-        'profile.default_content_setting_values': {
-            'images': 2, 
-            'javascript': 1,
-            'cookies': 1
-        },
-        'profile.managed_default_content_settings': {'images': 2},
-        'disk-cache-size': 4096
-    }
-    chrome_options.add_experimental_option('prefs', prefs)
-    
-    chrome_options.page_load_strategy = 'normal'
-    
-
-    chrome_bin = os.getenv('CHROME_BIN')
-    if chrome_bin:
-        chrome_options.binary_location = chrome_bin
-        logging.info(f"Используем Chrome: {chrome_bin}")
-    
-
-    chromedriver_path = os.getenv('CHROMEDRIVER_PATH')
-    
     try:
-        if chromedriver_path and os.path.exists(chromedriver_path):
-            from selenium.webdriver.chrome.service import Service
-            service = Service(
-                executable_path=chromedriver_path,
-                log_path='/tmp/chromedriver.log',
-                service_args=['--verbose']
-            )
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            logging.info(f"✓ ChromeDriver запущен: {chromedriver_path}")
-        else:
-            driver = webdriver.Chrome(options=chrome_options)
-            logging.info("✓ ChromeDriver запущен (системный)")
-            
-        driver.set_page_load_timeout(60)
-        driver.set_script_timeout(60)
+
+        chrome_bin = os.getenv('CHROME_BIN')
+        if chrome_bin and os.path.exists(chrome_bin):
+            chrome_options.binary_location = chrome_bin
+            logging.info(f"Использую Chrome: {chrome_bin}")
+        
+        chromedriver_path = os.getenv('CHROMEDRIVER_PATH')
         
 
-        try:
-            driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-                'source': '''
-                    delete Object.getPrototypeOf(navigator).webdriver
-                '''
-            })
-        except Exception as e:
-            logging.warning(f"Не вдалося приховати webdriver: {e}")
+        if chromedriver_path and os.path.exists(chromedriver_path):
+            from selenium.webdriver.chrome.service import Service
+            service = Service(executable_path=chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            logging.info(f"Использую ChromeDriver: {chromedriver_path}")
+        else:
+
+            driver = webdriver.Chrome(options=chrome_options)
+            logging.info("Chrome инициализирован (автоматический поиск)")
+        
+
+        driver.set_page_load_timeout(30)
+        driver.implicitly_wait(10)
+        
+        # Скрытие признаков автоматизации
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         
         try:
             driver.execute_cdp_cmd('Network.setUserAgentOverride', {
                 "userAgent": HEADERS["User-Agent"]
             })
         except Exception as e:
-            logging.warning(f"Не удалось установить User-Agent через CDP: {e}")
+            logging.warning(f"CDP User-Agent override не удался: {e}")
         
-
-        try:
-            driver.execute_script("return navigator.userAgent")
-            logging.info("✓ Selenium driver работает корректно")
-        except Exception as e:
-            logging.error(f"Selenium driver не отвечает: {e}")
-            raise
-        
+        logging.info("Selenium драйвер успешно создан")
         return driver
         
     except Exception as e:
-        logging.error(f"❌ Ошибка создания Selenium driver: {e}")
-        
-
-        if chrome_bin:
-            logging.info(f"Chrome binary существует: {os.path.exists(chrome_bin)}")
-        if chromedriver_path:
-            logging.info(f"ChromeDriver существует: {os.path.exists(chromedriver_path)}")
-        
-        logging.info(f"Содержимое /tmp: {os.listdir('/tmp')[:10]}")
-        
+        logging.error(f"Ошибка создания Selenium driver: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         raise
 
 def wait_for_content_load(driver, timeout=30):
@@ -287,12 +221,12 @@ def wait_for_content_load(driver, timeout=30):
     logging.warning("⚠️ Контент не загрузився")
     return False
 
-async def fetch_page(session, url, delay=0.5):
+async def fetch_page(session, url, delay=0.2):
     try:
         logging.info(f"Отримання сторінки: {url}")
         response = session.get(url, timeout=15)
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(delay, delay + 0.5))
+        await asyncio.sleep(random.uniform(delay, delay + 0.3))
         return response.json().get('data', {})
     except Exception as e:
         logging.error(f"Помилка: {e}")
@@ -303,7 +237,7 @@ async def fetch_wishlist_count(session, product_id):
         url = f"https://uss.rozetka.com.ua/session/wishlist/count-goods?country=UA&lang=ua&goods_ids={product_id}"
         response = session.get(url, timeout=10)
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(random.uniform(0.1, 0.2))
         json_data = response.json()
         data_array = json_data.get('data', [])
         return data_array[0].get('count', 0) if data_array else 0
@@ -318,7 +252,7 @@ async def fetch_product_reviews(session, product_id):
         
         response = session.get(url, timeout=15)
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(0.3, 0.6))
+        await asyncio.sleep(random.uniform(0.2, 0.4))
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -348,28 +282,30 @@ async def fetch_product_reviews(session, product_id):
         logging.error(f"Помилка парсингу відгуків товару: {e}")
         return None
 
-async def fetch_product_grouping_selenium(product_id, executor):
+async def fetch_selenium_data(product_id, executor):
     try:
         url = f"https://rozetka.com.ua/ua/{product_id}/p{product_id}/"
-        logging.info(f"🔍 [Selenium] Початок парсингу групування: {url}")
+        logging.info(f"🔍 [Selenium] Початок парсингу даних: {url}")
         
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, _selenium_fetch_grouping, url, product_id)
+        result = await loop.run_in_executor(executor, _selenium_fetch_data, url, product_id)
         
         return result
         
     except Exception as e:
-        logging.error(f"❌ Помилка парсингу групування: {e}")
+        logging.error(f"❌ Помилка парсингу даних: {e}")
         import traceback
         logging.error(traceback.format_exc())
         return {
             'has_grouping': 'Ні',
             'grouping_count': 0,
             'min_price': '',
-            'sellers': []
+            'sellers': [],
+            'videos_count': 0,
+            'credits_count': 0
         }
 
-def _selenium_fetch_grouping(url, product_id):
+def _selenium_fetch_data(url, product_id):
     driver = None
     try:
         driver = create_selenium_driver()
@@ -379,6 +315,7 @@ def _selenium_fetch_grouping(url, product_id):
         time.sleep(3)
         logging.info(f"✓ [Selenium] Страница загружена")
         
+
         logging.info("📜 [Selenium] Скроллинг к блоку продавцов...")
         try:
             all_sellers_block = driver.find_element(By.CSS_SELECTOR, "#all_sellers-block")
@@ -446,84 +383,108 @@ def _selenium_fetch_grouping(url, product_id):
             else:
                 logging.info(f"  ❌ Селектор не дав результатів")
         
-        if not li_items:
-            logging.info("ℹ️ [Selenium] Элементы li не найдены - группировка отсутствует")
-            
-            logging.info("🔍 [Selenium] Отладка - провіряєм структуру страницы:")
-            try:
-                block = driver.find_element(By.CSS_SELECTOR, "#all_sellers-block")
-                html = block.get_attribute('innerHTML')[:1000]
-                logging.info(f"📄 HTML блока (первые 1000 символів):\n{html}")
-            except:
-                logging.error("❌ Блок #all_sellers-block вообще не найден!")
-            
-            return {
-                'has_grouping': 'Ні',
-                'grouping_count': 0,
-                'min_price': '',
-                'sellers': []
-            }
-        
         prices = []
         sellers = []
-        logging.info(f"🔄 [Selenium] Парсинг {len(li_items)} карточек...")
+        has_grouping = 'Ні'
+        grouping_count = 0
+        min_price = ''
+        if li_items:
+            has_grouping = 'Так'
+            grouping_count = len(li_items)
+            logging.info(f"🔄 [Selenium] Парсинг {len(li_items)} карточек...")
+            
+            for idx, li in enumerate(li_items, 1):
+                try:
+                    seller_selectors = [
+                        "a.other-sellers-offers__seller-link",
+                        "a[href*='/seller/']",
+                        ".seller-name",
+                        "a[class*='seller']"
+                    ]
+                    
+                    seller_name = ''
+                    for sel in seller_selectors:
+                        try:
+                            seller_elem = li.find_element(By.CSS_SELECTOR, sel)
+                            seller_name = seller_elem.text.strip()
+                            if seller_name:
+                                sellers.append(seller_name)
+                                break
+                        except NoSuchElementException:
+                            continue
+                    
+                    price_selectors = [
+                        "p.other-sellers-offers__product-price-main--red",
+                        "p.other-sellers-offers__product-price-main",
+                        "[class*='price']",
+                    ]
+                    
+                    price_found = False
+                    for sel in price_selectors:
+                        try:
+                            price_elem = li.find_element(By.CSS_SELECTOR, sel)
+                            price_text = price_elem.text.strip()
+                            price_clean = re.sub(r'[^\d]', '', price_text)
+                            if price_clean:
+                                price_value = float(price_clean)
+                                prices.append(price_value)
+                                price_found = True
+                                break
+                        except NoSuchElementException:
+                            continue
+                            
+                except Exception as e:
+                    logging.error(f"     ❌ Ошибка обработки карточки #{idx}: {e}")
+            
+            min_price = min(prices) if prices else ''
         
-        for idx, li in enumerate(li_items, 1):
+
+        logging.info("📜 [Selenium] Скроллинг до конца страницы для видео...")
+        for _ in range(22):
+            driver.execute_script("window.scrollBy(0, 500);")
+            time.sleep(0.2)
+        
+
+        videos_count = 0
+        video_base_selector = "#videos-block > section > div > rz-product-video-slider > rz-scroller > div > div > div:nth-child({})"
+        while True:
             try:
-                seller_selectors = [
-                    "a.other-sellers-offers__seller-link",
-                    "a[href*='/seller/']",
-                    ".seller-name",
-                    "a[class*='seller']"
-                ]
-                
-                seller_name = ''
-                for sel in seller_selectors:
-                    try:
-                        seller_elem = li.find_element(By.CSS_SELECTOR, sel)
-                        seller_name = seller_elem.text.strip()
-                        if seller_name:
-                            sellers.append(seller_name)
-                            break
-                    except NoSuchElementException:
-                        continue
-                
-                price_selectors = [
-                    "p.other-sellers-offers__product-price-main--red",
-                    "p.other-sellers-offers__product-price-main",
-                    "[class*='price']",
-                ]
-                
-                price_found = False
-                for sel in price_selectors:
-                    try:
-                        price_elem = li.find_element(By.CSS_SELECTOR, sel)
-                        price_text = price_elem.text.strip()
-                        price_clean = re.sub(r'[^\d]', '', price_text)
-                        if price_clean:
-                            price_value = float(price_clean)
-                            prices.append(price_value)
-                            price_found = True
-                            break
-                    except NoSuchElementException:
-                        continue
-                        
-            except Exception as e:
-                logging.error(f"     ❌ Ошибка обработки карточки #{idx}: {e}")
+                driver.find_element(By.CSS_SELECTOR, video_base_selector.format(videos_count + 1))
+                videos_count += 1
+            except NoSuchElementException:
+                break
         
-        min_price = min(prices) if prices else ''
+
+
+
+
+
+        credits_count = 0
+        try:
+            wait = WebDriverWait(driver, 10)
+            container = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".product-pictogram__list")))
+            logging.info("✓ [Selenium] Блок .product-pictogram__list найден")
+            items = driver.find_elements(By.CSS_SELECTOR, "div.product-pictogram__item")
+            credits_count = len(items)
+            logging.info(f"✓ [Selenium] Найдено {credits_count} элементов кредитов")
+        except Exception as e:
+            logging.error(f"❌ [Selenium] Ошибка парсинга кредитов: {e}")
+        
         logging.info(f"✅ [Selenium] Парсинг завершен:")
-        logging.info(f"   - Группировка: Так")
-        logging.info(f"   - Количество карточек: {len(li_items)}")
+        logging.info(f"   - Группировка: {has_grouping}")
+        logging.info(f"   - Количество карточек: {grouping_count}")
         logging.info(f"   - Минимальная цена: {min_price}")
         logging.info(f"   - Найдено продавцов: {len(sellers)}")
-        logging.info(f"   - Найдено цен: {len(prices)}")
+        logging.info(f"   - Видео: {videos_count}")
+        logging.info(f"   - Кредиты: {credits_count}")
         
         return {
-            'has_grouping': 'Так',
-            'grouping_count': len(li_items),
+            'has_grouping': has_grouping,
+            'grouping_count': grouping_count,
             'min_price': min_price,
-            'sellers': sellers
+            'sellers': sellers,
+            'videos_count': videos_count,
+            'credits_count': credits_count
         }
         
     except Exception as e:
@@ -534,7 +495,9 @@ def _selenium_fetch_grouping(url, product_id):
             'has_grouping': 'Ні',
             'grouping_count': 0,
             'min_price': '',
-            'sellers': []
+            'sellers': [],
+            'videos_count': 0,
+            'credits_count': 0
         }
     finally:
         if driver:
@@ -545,7 +508,7 @@ async def fetch_product_page(session, url, executor):
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(executor, lambda: session.get(url, timeout=15))
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(0.3, 0.8))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         return response.text
     except Exception as e:
         logging.error(f"Помилка: {e}")
@@ -582,96 +545,17 @@ def parse_characteristics(html: str):
         logging.error(f"Помилка парсингу: {e}")
         return {}, ''
 
-async def fetch_video_credit_selenium(product_id, executor):
-    url = f"https://rozetka.com.ua/ua/{product_id}/p{product_id}/"
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(executor, _selenium_fetch_video_credit, url)
-    return result
-
-def _selenium_fetch_video_credit(url):
-    driver = None
-    try:
-        driver = create_selenium_driver()
-        logging.info(f"🔄 [Selenium] Загрузка страницы для відео/кредитів: {url}")
-        driver.get(url)
-        logging.info("Страница загружена")
-        
-        logging.info("Ожидание 2 секунды...")
-        time.sleep(2)
-        
-        logging.info("Прокрутка страницы вниз...")
-        scroll_pause = 0.5
-        screen_height = driver.execute_script("return window.innerHeight")
-        scroll_position = 0
-        
-        for i in range(34):
-            driver.execute_script(f"window.scrollTo(0, {scroll_position});")
-            scroll_position += screen_height
-            time.sleep(scroll_pause)
-            logging.info(f"Прокрутка {i+1}/34...")
-        
-        logging.info("Прокрутка завершена, ожидание загрузки контента...")
-        time.sleep(2)
-        
-        video_count = 0
-        logging.info("Поиск видео на странице...")
-        videos = driver.find_elements(By.CSS_SELECTOR, "#videos-block > section > div > rz-product-video-slider > rz-scroller > div > div > div")
-        
-        if len(videos) > 0:
-            video_count = len(videos)
-            logging.info(f"✓ Знайдено відео: {video_count}")
-        else:
-            logging.info("Видео не найдены по основному селектору, проверяем наличие блока #videos-block...")
-            video_block = driver.find_elements(By.CSS_SELECTOR, "#videos-block")
-            
-            if len(video_block) > 0:
-                logging.info("Блок #videos-block найден, проверяем содержимое...")
-                video_block_html = video_block[0].get_attribute('innerHTML')
-                
-                if "www.youtube.com" in video_block_html:
-                    video_count = 1
-                    logging.info(f"✓ Знайдено відео: {video_count}")
-                else:
-                    video_count = 0
-                    logging.info(f"✓ Знайдено відео: {video_count}")
-                    logging.info("Блок видео пустой - видео отсутствуют")
-            else:
-                video_count = 0
-                logging.info(f"✓ Знайдено відео: {video_count}")
-                logging.info("Блок с видео не найден на странице")
-        
-        credit_count = 0
-        try:
-            buttons = driver.find_elements(By.XPATH, "//rz-product-pictogram-list//rz-scroller//div/div/div/button")
-            credit_count = len(buttons)
-            logging.info(f"✓ Знайдено кредитів: {credit_count}")
-        except Exception as e:
-            logging.warning(f"⚠️ Помилка парсингу кредитів: {e}")
-        
-        return {'video_count': video_count, 'credit_count': credit_count}
-        
-    except Exception as e:
-        logging.error(f"❌ Помилка Selenium відео/кредитів: {e}")
-        return {'video_count': 0, 'credit_count': 0}
-    finally:
-        if driver:
-            driver.quit()
-
 async def fetch_delivery_info(session, product_id, price):
     try:
         url = f"https://product-api.rozetka.com.ua/v4/deliveries/get-deliveries?country=UA&lang=ua&city_id=b205dde2-2e2e-4eb9-aef2-a67c82bbdf27&cost={price}&product_id={product_id}"
         response = session.get(url, timeout=15)
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(0.2, 0.4))
+        await asyncio.sleep(random.uniform(0.1, 0.3))
         data = response.json().get('data', {})
         deliveries = []
         for d in data.get('deliveries', []):
             cost = d.get('cost', {})
-            if cost.get('new') is not None:
-                cost_value = 'Безкоштовно' if cost['new'] == 0 else cost['new']
-            else:
-                text_value = cost.get('text', 'Н/Д')
-                cost_value = 'Безкоштовно' if text_value == '0' else text_value
+            cost_value = cost.get('new') if cost.get('new') is not None else cost.get('text', 'Н/Д')
             deliveries.append({'title': d.get('title', ''), 'cost': cost_value})
         return {'deliveries': deliveries, 'payments': data.get('payments', '')}
     except Exception as e:
@@ -689,18 +573,14 @@ async def process_product(session, product, executor, include_chars=True, mode="
     wishlist_count = await fetch_wishlist_count(session, product_id)
     characteristics, warranty = {}, ''
     product_avg_rating = None
-    grouping_info = None
-    video_credit = {'video_count': 0, 'credit_count': 0}
+    selenium_data = await fetch_selenium_data(product_id, executor)
     
     if include_chars:
         html = await fetch_product_page(session, href, executor)
         characteristics, warranty = parse_characteristics(html)
     
-    video_credit = await fetch_video_credit_selenium(product_id, executor)
-    
     if mode == "seller" and not include_chars:
         product_avg_rating = await fetch_product_reviews(session, product_id)
-        grouping_info = await fetch_product_grouping_selenium(product_id, executor)
     
     delivery_info = await fetch_delivery_info(session, product_id, price) if product_id and price else None
     
@@ -712,17 +592,16 @@ async def process_product(session, product, executor, include_chars=True, mode="
         'warranty': warranty,
         'wishlist_count': wishlist_count, 
         'delivery': delivery_info,
-        'video_count': video_credit['video_count'],
-        'credit_count': video_credit['credit_count']
+        'videos_count': selenium_data['videos_count'],
+        'credits_count': selenium_data['credits_count']
     }
     
     if mode == "seller" and not include_chars:
         result['product_avg_rating'] = product_avg_rating
-        if grouping_info:
-            result['has_grouping'] = grouping_info['has_grouping']
-            result['grouping_count'] = grouping_info['grouping_count']
-            result['min_price_in_group'] = grouping_info['min_price']
-            result['sellers_in_group'] = ', '.join(grouping_info.get('sellers', []))
+        result['has_grouping'] = selenium_data['has_grouping']
+        result['grouping_count'] = selenium_data['grouping_count']
+        result['min_price_in_group'] = selenium_data['min_price']
+        result['sellers_in_group'] = ', '.join(selenium_data.get('sellers', []))
     
     return result
 
@@ -733,7 +612,7 @@ async def fetch_details(session, product_ids):
         detail_headers = {'X-Requested-With': 'XMLHttpRequest'}
         response = session.get(url, headers=detail_headers, timeout=15)
         response.raise_for_status()
-        await asyncio.sleep(random.uniform(1, 2))
+        await asyncio.sleep(random.uniform(0.5, 1))
         return response.json().get('data', [])
     except Exception as e:
         logging.error(f"Помилка деталей: {e}")
@@ -791,11 +670,12 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
         filtered_chars = sorted([c for c in unique_chars if c in popular_chars_set])
         other_chars = sorted([c for c in unique_chars if c not in popular_chars_set])
     
-    delivery_columns = [
-        "Самовивіз з магазинів Rozetka",
-        "Самовивіз з Нової Пошти",
-        "Самовивіз з поштоматів Rozetka"
-    ]
+    unique_deliveries = set()
+    for product in products:
+        for d in product.get('delivery', {}).get('deliveries', []):
+            if d.get('title'):
+                unique_deliveries.add(d['title'])
+    unique_deliveries = sorted(list(unique_deliveries))
     
     missing_filtered_chars = False
     if include_chars and filtered_chars:
@@ -834,19 +714,19 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
     if mode == "seller" and not include_chars:
         fixed_headers.extend(['Середня оцінка (перші 3 відгуки)', 'Групування, так/ні', 'Кількість карток у групуванні', 'Мінімальна ціна в групуванні', 'Продавці в групуванні'])
     
-    headers = fixed_headers + delivery_columns
+    headers = fixed_headers + unique_deliveries
     if include_chars:
         headers += filtered_chars + other_chars
     
     fixed_count = len(fixed_headers)
-    delivery_count = len(delivery_columns)
+    delivery_count = len(unique_deliveries)
     filtered_count = len(filtered_chars)
     
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=header)
         cell.alignment = Alignment(horizontal='center', vertical='center')
         
-        if header in ['Середня оцінка (перші 3 відгуки)', 'Групування, так/ні', 'Кількість карток у групуванні', 'Мінімальна ціна в групуванні', 'Продавці в групуванні']:
+        if header in ['Середня оцінка (перші 3 відгуки)', 'Групування, так/ні', 'Кількість карток у групуванні', 'Мінімальна ціна в групуванні', 'Продавці в групуванні', 'Кількість відео', 'Кількість кредитів']:
             cell.fill = dark_green_fill
         elif col <= fixed_count:
             cell.fill = green_fill
@@ -859,18 +739,7 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
     
     for idx, product in enumerate(products, 1):
         row = idx + 1
-        
-        deliveries = product.get('delivery', {}).get('deliveries', [])
-        delivery_dict = {}
-        for d in deliveries:
-            title = d.get('title', '').lower()
-            cost = d.get('cost', '')
-            if 'магазин' in title:
-                delivery_dict["Самовивіз з магазинів Rozetka"] = cost
-            elif 'нова пош' in title:
-                delivery_dict["Самовивіз з Нової Пошти"] = cost
-            elif 'поштомат' in title:
-                delivery_dict["Самовивіз з поштоматів Rozetka"] = cost
+        delivery_dict = {d.get('title', ''): 'безкоштовно' if d.get('cost', '') == 0 else d.get('cost', '') for d in product.get('delivery', {}).get('deliveries', [])}
         
         cat = product.get('category', {})
         if hasattr(cat, 'get'):
@@ -885,7 +754,7 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
             product.get('comments_mark', ''), product.get('comments_amount', 0),
             product.get('wishlist_count', 0), product.get('seller', {}).get('title', ''),
             product.get('delivery', {}).get('payments', ''), product.get('warranty', ''),
-            product.get('video_count', 0), product.get('credit_count', 0)
+            product.get('videos_count', 0), product.get('credits_count', 0)
         ]
         
         if mode == "seller" and not include_chars:
@@ -895,7 +764,7 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
             data.append(product.get('min_price_in_group', ''))
             data.append(product.get('sellers_in_group', ''))
         
-        for delivery_name in delivery_columns:
+        for delivery_name in unique_deliveries:
             data.append(delivery_dict.get(delivery_name, ''))
         
         if include_chars:
@@ -912,6 +781,7 @@ async def create_sheet_with_data(wb, products, search_text, include_chars, popul
         ws.column_dimensions[column[0].column_letter].width = min(max_length + 2, 50)
 
 def extract_product_ids_from_urls(urls: List[str]) -> List[int]:
+    """Витягує ID товарів з URL"""
     product_ids = []
     for url in urls:
         match = re.search(r'/p(\d+)/', url)
@@ -977,22 +847,22 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
         <html>
         <head><title>Rozetka Parser</title><meta charset="utf-8"></head>
         <body>
-            <h1>Rozetka Parser</h1>
+            <h1>Rozetka Parser (швидкий режим - перші 2 сторінки)</h1>
             <p>Добро пожаловать, {current_user['username']}!</p>
             
             <div class="option">
                 <h2>1. Парсинг по запиту/категорії</h2>
-                <input type="text" id="searchUrl" placeholder="URL пошуку">
-                <input type="number" id="searchPages" placeholder="Кількість сторінок" min="1">
+                <input type="text" id="searchUrl" placeholder="URL пошуку або категорії">
                 <label><input type="checkbox" class="checkbox" id="searchChars" checked> З характеристиками</label>
+                <input type="number" id="searchMaxPages" value="2" min="1" max="1000" placeholder="Кількість сторінок">
                 <button onclick="runSearch()">Запустити</button>
             </div>
             
             <div class="option">
                 <h2>2. Парсинг продавця</h2>
                 <input type="text" id="sellerName" placeholder="Назва або URL продавця">
-                <input type="number" id="sellerPages" placeholder="Кількість сторінок" min="1">
                 <label><input type="checkbox" class="checkbox" id="sellerChars" checked> З характеристиками</label>
+                <input type="number" id="sellerMaxPages" value="2" min="1" max="1000" placeholder="Кількість сторінок">
                 <button onclick="runSeller()">Запустити</button>
             </div>
             
@@ -1022,15 +892,15 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                 
                 async function runSearch() {{
                     const url = document.getElementById('searchUrl').value;
-                    const pages = parseInt(document.getElementById('searchPages').value) || undefined;
                     const includeChars = document.getElementById('searchChars').checked;
+                    const maxPages = parseInt(document.getElementById('searchMaxPages').value);
                     if (!url) {{ alert('Введіть URL'); return; }}
                     
                     showStatus('Обробка...');
                     const res = await fetch('/api/search', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{url, include_chars: includeChars, pages}})
+                        body: JSON.stringify({{url, include_chars: includeChars, max_pages: maxPages}})
                     }});
                     const data = await res.json();
                     if (data.filename) {{
@@ -1043,8 +913,8 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                 
                 async function runSeller() {{
                     let sellerName = document.getElementById('sellerName').value;
-                    const pages = parseInt(document.getElementById('sellerPages').value) || undefined;
                     const includeChars = document.getElementById('sellerChars').checked;
+                    const maxPages = parseInt(document.getElementById('sellerMaxPages').value);
                     if (!sellerName) {{ alert('Введіть назву продавця'); return; }}
                     
                     if (sellerName.includes('rozetka.com.ua')) {{
@@ -1058,7 +928,7 @@ async def root(request: Request, current_user: Optional[Dict[str, str]] = Depend
                     const res = await fetch('/api/seller', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{seller_name: sellerName, include_chars: includeChars, pages}})
+                        body: JSON.stringify({{seller_name: sellerName, include_chars: includeChars, max_pages: maxPages}})
                     }});
                     const data = await res.json();
                     if (data.filename) {{
@@ -1453,7 +1323,7 @@ async def parse_favorite_quick(request: Request, current_user: Optional[Dict[str
         session = cloudscraper.create_scraper()
         session.headers.update(HEADERS)
         
-        executor = ThreadPoolExecutor(max_workers=20)
+        executor = ThreadPoolExecutor(max_workers=10)
         all_products = []
         
         batch_size = 60
@@ -1498,7 +1368,7 @@ async def parse_favorite(favorite_id: int, current_user: Optional[Dict[str, str]
         session = cloudscraper.create_scraper()
         session.headers.update(HEADERS)
         
-        executor = ThreadPoolExecutor(max_workers=20)
+        executor = ThreadPoolExecutor(max_workers=10)
         all_products = []
         
         batch_size = 60
@@ -1534,122 +1404,77 @@ async def delete_favorite(favorite_id: int, current_user: Optional[Dict[str, str
         logging.error(f"Помилка: {e}")
         return {"success": False, "error": str(e)}
 
+async def fetch_category_page(session, category_id, page=1):
+    try:
+        url = f"https://catalog-api.rozetka.com.ua/v0.1/api/category/catalog?country=UA&lang=ua&id={category_id}&filters=page:{page}"
+        logging.info(f"Отримання сторінки категорії: {url}")
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        await asyncio.sleep(random.uniform(0.2, 0.3))
+        data = response.json().get('data', {})
+        return {
+            'product_ids': data.get('goods', {}).get('ids', []),
+            'total_pages': data.get('pagination', {}).get('total_pages', 1)
+        }
+    except Exception as e:
+        logging.error(f"Помилка: {e}")
+        return {'product_ids': [], 'total_pages': 1}
+
 @app.post("/api/search")
 async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] = Depends(get_current_user)):
     if not current_user:
         raise HTTPException(401, "Не авторизовано")
     try:
-        category_match = re.search(r'/c(\d+)/?', req.url)
-        if category_match:
-            category_id = category_match.group(1)
-            search_text = f"Категорія {category_id}"
-            base_url = f"https://catalog-api.rozetka.com.ua/v0.1/api/category/catalog?country=UA&lang=ua&id={category_id}"
-            first_page_url = base_url + "&filters=page:1"
-            session = cloudscraper.create_scraper()
-            session.headers.update(HEADERS)
-            data = await fetch_page(session, first_page_url)
-            
-            # Перевірка на порожній результат
-            if not data or not isinstance(data, dict):
-                raise HTTPException(400, f"Категорія {category_id} не знайдена або порожня")
-            
-            pagination = data.get('pagination', {})
-            quantities = data.get('quantities', {})
-            max_pages = pagination.get('total_pages', 0)
-            total_found = quantities.get('goods_quantity_total_found', 0)
-            
-            logging.info(f"Максимум сторінок знайдено: {max_pages}")
-            logging.info(f"Знайдено товарів: {total_found}, Парсимо сторінок (можна парсити до {max_pages})")
-            
-            if total_found == 0 or max_pages == 0:
-                raise HTTPException(400, f"В категорії {category_id} немає товарів")
-            
-            total_pages = min(max_pages, MAX_PAGES)
-            if req.pages is not None:
-                total_pages = min(req.pages, max_pages, MAX_PAGES)
-            
-            all_product_ids = [item.get('id') for item in data.get('goods', [])]
-            if not all_product_ids:
-                raise HTTPException(400, "Не вдалося отримати список товарів")
-            
-            logging.info(f"Перша сторінка: зібрано {len(all_product_ids)} товарів")
-            for page in range(2, total_pages + 1):
-                page_url = base_url + f"&filters=page:{page}"
-                data = await fetch_page(session, page_url)
+        parsed_url = urllib.parse.urlparse(req.url)
+        if 'c' in parsed_url.path:  # Это категория, например /c80124/
+            category_match = re.search(r'/c(\d+)/', req.url)
+            if category_match:
+                category_id = category_match.group(1)
+                session = cloudscraper.create_scraper()
+                session.headers.update(HEADERS)
                 
-                if not data or not isinstance(data, dict):
-                    logging.warning(f"Сторінка {page} повернула невірні дані")
-                    break
+                first_page = await fetch_category_page(session, category_id, 1)
+                total_pages = min(first_page['total_pages'], req.max_pages)
+                all_product_ids = first_page['product_ids']
                 
-                goods = data.get('goods', [])
-                page_ids = [item.get('id') for item in goods]
+                for page in range(2, total_pages + 1):
+                    page_data = await fetch_category_page(session, category_id, page)
+                    if not page_data['product_ids']:
+                        logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
+                        break
+                    all_product_ids.extend(page_data['product_ids'])
+                    logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_data['product_ids'])} товарів (всього: {len(all_product_ids)})")
                 
-                if not page_ids:
-                    logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
-                    break
-                
-                all_product_ids.extend(page_ids)
-                logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_ids)} товарів (всього: {len(all_product_ids)})")
-            
-            filename_prefix = f"rozetka_category_{category_id}"
-            
+                text = f"Категорія {category_id}"
+            else:
+                raise HTTPException(400, "Невірний URL категорії")
         else:
-            query = urllib.parse.urlparse(req.url).query
+            query = parsed_url.query
             text = urllib.parse.parse_qs(query).get('text', [''])[0]
             if not text:
-                raise HTTPException(400, "Не знайдено параметр 'text' або ID категорії")
+                raise HTTPException(400, "Не знайдено параметр 'text'")
             
-            search_text = text
             base_url = "https://search.rozetka.com.ua/ua/search/api/v7/?country=UA&lang=ua&text=" + urllib.parse.quote(text)
+            
             session = cloudscraper.create_scraper()
             session.headers.update(HEADERS)
+            
             data = await fetch_page(session, base_url)
-            
-            if not data or not isinstance(data, dict):
-                raise HTTPException(400, f"Пошук за запитом '{text}' не дав результатів")
-            
-            pagination = data.get('pagination', {})
-            quantities = data.get('quantities', {})
-            max_pages = pagination.get('total_pages', 0)
-            total_found = quantities.get('goods_quantity_total_found', 0)
-            
-            logging.info(f"Максимум сторінок знайдено: {max_pages}")
-            logging.info(f"Знайдено товарів: {total_found}, Парсимо сторінок (можна парсити до {max_pages})")
-            
-            if total_found == 0 or max_pages == 0:
-                raise HTTPException(400, f"За запитом '{text}' нічого не знайдено")
-            
-            total_pages = min(max_pages, MAX_PAGES)
-            if req.pages is not None:
-                total_pages = min(req.pages, max_pages, MAX_PAGES)
-            
-            all_product_ids = [item.get('id') for item in data.get('goods', [])]
-            for page in range(2, total_pages + 1):
+            total_pages = min(data.get('pagination', {}).get('total_pages', 1), req.max_pages)
+            all_product_ids = []
+            for page in range(1, total_pages + 1):
                 page_url = f"{base_url}&page={page}"
                 data = await fetch_page(session, page_url)
-                
-                if not data or not isinstance(data, dict):
-                    logging.warning(f"Сторінка {page} повернула невірні дані")
-                    break
-                
-                goods = data.get('goods', [])
-                page_ids = [item.get('id') for item in goods]
-                
+                page_ids = [p.get('id') for p in data.get('goods', []) if p.get('id')]
                 if not page_ids:
                     logging.warning(f"Сторінка {page} порожня, зупиняємо парсинг")
                     break
-                
                 all_product_ids.extend(page_ids)
                 logging.info(f"Сторінка {page}/{total_pages}: зібрано {len(page_ids)} товарів (всього: {len(all_product_ids)})")
-            
-            filename_prefix = f"rozetka_search_{text[:20].replace(' ', '_')}"
-        
-        if not all_product_ids:
-            raise HTTPException(400, "Не вдалося зібрати жодного товару")
         
         logging.info(f"Всього товарів: {len(all_product_ids)}")
         
-        executor = ThreadPoolExecutor(max_workers=50)
+        executor = ThreadPoolExecutor(max_workers=10)
         all_products = []
         
         batch_size = 60
@@ -1662,16 +1487,12 @@ async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] 
         
         executor.shutdown(wait=True)
         
-        filename = f"downloads/{filename_prefix}_{uuid.uuid4().hex[:8]}.xlsx"
-        await export_to_excel(all_products, search_text, filename, req.include_chars, "search")
+        filename = f"downloads/rozetka_search_{text[:20].replace(' ', '_')}_{uuid.uuid4().hex[:8]}.xlsx"
+        await export_to_excel(all_products, text, filename, req.include_chars, "search")
         
         return {"filename": os.path.basename(filename), "count": len(all_products)}
-    except HTTPException:
-        raise
     except Exception as e:
         logging.error(f"Помилка: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
         raise HTTPException(500, str(e))
 
 @app.post("/api/seller")
@@ -1683,7 +1504,7 @@ async def api_seller(req: SellerRequest, current_user: Optional[Dict[str, str]] 
             url = f"https://search.rozetka.com.ua/ua/seller/api/v7/?front-type=xl&country=UA&lang=ua&name={seller_name}&page={page}"
             response = session.get(url, timeout=15)
             response.raise_for_status()
-            await asyncio.sleep(random.uniform(0.2, 0.4))
+            await asyncio.sleep(random.uniform(0.1, 0.3))
             data = response.json().get('data', {})
             return {
                 'seller_title': data.get('seller_info', {}).get('title', ''),
@@ -1696,14 +1517,10 @@ async def api_seller(req: SellerRequest, current_user: Optional[Dict[str, str]] 
         
         first_page = await fetch_seller_api(session, req.seller_name, 1)
         seller_title = first_page['seller_title']
-        max_pages = first_page['total_pages']
-        logging.info(f"Максимум сторінок знайдено: {max_pages}")
-        total_pages = min(max_pages, MAX_PAGES)
-        if req.pages is not None:
-            total_pages = min(req.pages, max_pages, MAX_PAGES)
+        total_pages = min(first_page['total_pages'], req.max_pages)
         all_product_ids = first_page['product_ids']
         
-        logging.info(f"Продавець: {seller_title}, Парсимо {total_pages} сторінок (можна парсити до {max_pages}), Перша сторінка: {len(all_product_ids)} товарів")
+        logging.info(f"Продавець: {seller_title}, Парсимо перші {total_pages} сторінок, Перша сторінка: {len(all_product_ids)} товарів")
         
         for page in range(2, total_pages + 1):
             page_data = await fetch_seller_api(session, req.seller_name, page)
@@ -1715,14 +1532,14 @@ async def api_seller(req: SellerRequest, current_user: Optional[Dict[str, str]] 
         
         logging.info(f"Всього товарів: {len(all_product_ids)}")
         
-        executor = ThreadPoolExecutor(max_workers=20)
+        executor = ThreadPoolExecutor(max_workers=10)
         all_products = []
         
         batch_size = 60
         for i in range(0, len(all_product_ids), batch_size):
             batch = all_product_ids[i:i + batch_size]
             details = await fetch_details(session, batch)
-            tasks = [process_product(session, p, executor, req.include_chars, "seller") for p in details]
+            tasks = [process_product(session, p, executor, req.include_chars, "s№eller") for p in details]
             batch_results = await asyncio.gather(*tasks)
             all_products.extend(batch_results)
         
