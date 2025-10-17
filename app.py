@@ -104,12 +104,18 @@ async def get_current_user(request: Request) -> Optional[Dict[str, str]]:
         return None
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
     'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7',
     'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
+    'Upgrade-Insecure-Requests': '1',
+    'Referer': 'https://rozetka.com.ua/',
+    'Origin': 'https://rozetka.com.ua',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Cache-Control': 'max-age=0',
 }
 
 def create_selenium_driver():
@@ -1408,6 +1414,7 @@ async def fetch_category_page(session, category_id, page=1):
     try:
         url = f"https://catalog-api.rozetka.com.ua/v0.1/api/category/catalog?country=UA&lang=ua&id={category_id}&filters=page:{page}"
         logging.info(f"Отримання сторінки категорії: {url}")
+        
         response = session.get(url, timeout=15)
         response.raise_for_status()
         await asyncio.sleep(random.uniform(0.2, 0.3))
@@ -1417,8 +1424,9 @@ async def fetch_category_page(session, category_id, page=1):
             'total_pages': data.get('pagination', {}).get('total_pages', 1)
         }
     except Exception as e:
-        logging.error(f"Помилка: {e}")
-        return {'product_ids': [], 'total_pages': 1}
+        logging.error(f"Помилка категорії (спробуємо пошук): {e}")
+        return {'product_ids': [], 'total_pages': 1, 'fallback': True}
+
 
 @app.post("/api/search")
 async def api_search(req: SearchRequest, current_user: Optional[Dict[str, str]] = Depends(get_current_user)):
@@ -1566,3 +1574,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
